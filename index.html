@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deteksi Gerakan Tangan Interaktif - MediaPipe Hands</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkBg: '#0f172a',
+                        cardBg: '#1e293b',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MediaPipe Hands & Camera Utils CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .mirror-mode { transform: scaleX(-1); }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="bg-darkBg text-slate-100 min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
+
+    <header class="bg-cardBg/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 px-4 py-3 shadow-lg">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="bg-indigo-600 p-2.5 rounded-xl shadow-md shadow-indigo-500/20 text-white">
+                    <i class="fa-solid fa-hand text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg tracking-tight bg-gradient-to-r from-indigo-400 to-teal-400 bg-clip-text text-transparent">HandTrack AI</h1>
+                    <p class="text-xs text-slate-400">Deteksi Gerakan Tangan Real-Time via Kamera</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <div id="statusIndicator" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700 text-xs font-medium">
+                    <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" id="statusDot"></span>
+                    <span id="statusText">Kamera Siap</span>
+                </div>
+                <button id="toggleCameraBtn" class="bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-camera"></i>
+                    <span id="cameraBtnText">Mulai Kamera</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left & Center: Video / Canvas Viewport (Span 2) -->
+        <div class="lg:col-span-2 flex flex-col gap-4">
+            <div class="relative bg-cardBg rounded-2xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center aspect-video group">
+                <!-- Hidden video source for MediaPipe -->
+                <video id="webcam" class="absolute inset-0 w-full h-full object-cover mirror-mode opacity-0 pointer-events-none" autoplay playsinline></video>
+                
+                <!-- Display Canvas for Video feed and Hand Landmarks overlay -->
+                <canvas id="output_canvas" class="absolute inset-0 w-full h-full object-cover mirror-mode"></canvas>
+                
+                <!-- Drawing Layer Canvas on top of video -->
+                <canvas id="drawing_canvas" class="absolute inset-0 w-full h-full object-cover mirror-mode pointer-events-none z-10"></canvas>
+
+                <!-- Placeholder state before starting -->
+                <div id="cameraPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 z-20 text-center p-6 transition-opacity duration-300">
+                    <div class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-4 text-2xl shadow-inner">
+                        <i class="fa-solid fa-video-slash"></i>
+                    </div>
+                    <h3 class="text-lg font-bold mb-1">Kamera Belum Aktif</h3>
+                    <p class="text-slate-400 text-sm max-w-sm mb-5">Klik tombol "Mulai Kamera" di atas atau bawah untuk mengaktifkan pelacakan tangan AI.</p>
+                    <button id="startPlaceholderBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-play"></i> Aktifkan Sekarang
+                    </button>
+                </div>
+
+                <!-- Floating Info Badge on Canvas -->
+                <div class="absolute bottom-4 left-4 z-20 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs flex items-center gap-3 text-slate-300">
+                    <div>FPS: <span id="fpsCounter" class="font-mono text-indigo-400 font-bold">0</span></div>
+                    <div class="w-px h-3 bg-slate-700"></div>
+                    <div>Mode: <span id="activeModeBadge" class="text-teal-400 font-medium">Kanvas Jari</span></div>
+                </div>
+            </div>
+
+            <!-- Mode Selector Bar -->
+            <div class="grid grid-cols-3 gap-3">
+                <button onclick="setInteractionMode('draw')" id="modeDrawBtn" class="p-3 rounded-xl border border-indigo-500 bg-indigo-500/10 text-indigo-300 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer">
+                    <i class="fa-solid fa-pen-nib"></i> Jari Lukis
+                </button>
+                <button onclick="setInteractionMode('particles')" id="modeParticlesBtn" class="p-3 rounded-xl border border-slate-800 bg-cardBg hover:border-slate-700 text-slate-400 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer">
+                    <i class="fa-solid fa-atom"></i> Partikel Interaktif
+                </button>
+                <button onclick="setInteractionMode('stats')" id="modeStatsBtn" class="p-3 rounded-xl border border-slate-800 bg-cardBg hover:border-slate-700 text-slate-400 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer">
+                    <i class="fa-solid fa-chart-line"></i> Info Landmark
+                </button>
+            </div>
+        </div>
+
+        <!-- Right Sidebar: Controls, Gesture Info & Instructions (Span 1) -->
+        <div class="flex flex-col gap-4">
+            
+            <!-- Detected Gesture Card -->
+            <div class="bg-cardBg rounded-2xl p-5 border border-slate-800 shadow-lg">
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center justify-between">
+                    <span>Gesture Terdeteksi</span>
+                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i>
+                </h2>
+                <div class="bg-slate-900/60 rounded-xl p-4 border border-slate-800/80 flex items-center gap-4">
+                    <div id="gestureIcon" class="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center text-xl text-indigo-400 border border-slate-700">
+                        <i class="fa-solid fa-hand"></i>
+                    </div>
+                    <div>
+                        <div id="gestureName" class="text-lg font-bold text-white tracking-wide">Menunggu Tangan...</div>
+                        <div id="gestureDesc" class="text-xs text-slate-400">Arahkan tangan ke depan kamera.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Drawing Controls (Visible only in Draw Mode) -->
+            <div id="drawControlsPanel" class="bg-cardBg rounded-2xl p-5 border border-slate-800 shadow-lg flex flex-col gap-4">
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                    <span>Pengaturan Lukis</span>
+                    <button onclick="clearCanvas()" class="text-xs text-indigo-400 hover:underline cursor-pointer">Bersihkan</button>
+                </h2>
+                <div class="flex flex-col gap-3">
+                    <div>
+                        <label class="text-xs text-slate-400 mb-1 block">Pilih Warna</label>
+                        <div class="flex items-center gap-2">
+                            <button onclick="setDrawColor('#6366f1')" class="w-8 h-8 rounded-full bg-indigo-500 border-2 border-white ring-2 ring-indigo-500/50 color-picker-btn cursor-pointer" data-color="#6366f1"></button>
+                            <button onclick="setDrawColor('#ec4899')" class="w-8 h-8 rounded-full bg-pink-500 border-2 border-transparent color-picker-btn cursor-pointer" data-color="#ec4899"></button>
+                            <button onclick="setDrawColor('#10b981')" class="w-8 h-8 rounded-full bg-emerald-500 border-2 border-transparent color-picker-btn cursor-pointer" data-color="#10b981"></button>
+                            <button onclick="setDrawColor('#f59e0b')" class="w-8 h-8 rounded-full bg-amber-500 border-2 border-transparent color-picker-btn cursor-pointer" data-color="#f59e0b"></button>
+                            <button onclick="setDrawColor('#38bdf8')" class="w-8 h-8 rounded-full bg-sky-400 border-2 border-transparent color-picker-btn cursor-pointer" data-color="#38bdf8"></button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-400 mb-1 flex justify-between"><span>Ukuran Kuas</span> <span id="brushSizeVal">6px</span></label>
+                        <input type="range" min="2" max="25" value="6" id="brushSizeRange" class="w-full accent-indigo-500 bg-slate-800 rounded-lg h-2 cursor-pointer">
+                    </div>
+                    <p class="text-[11px] text-slate-400 bg-slate-900/50 p-2.5 rounded-lg border border-slate-800">
+                        <i class="fa-solid fa-circle-info text-indigo-400 mr-1"></i> Dekatkan ujung jari telunjuk dan ibu jari (Pinch) untuk mulai menggambar di udara.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="bg-cardBg rounded-2xl p-5 border border-slate-800 shadow-lg flex-1">
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Panduan & Gerakan</h2>
+                <ul class="space-y-2.5 text-xs text-slate-300">
+                    <li class="flex items-start gap-2.5">
+                        <div class="bg-indigo-500/10 text-indigo-400 p-1 rounded mt-0.5"><i class="fa-solid fa-hand-point-up"></i></div>
+                        <div><strong class="text-white">Telunjuk (Pointing):</strong> Mengontrol kursor atau menarik partikel di layar.</div>
+                    </li>
+                    <li class="flex items-start gap-2.5">
+                        <div class="bg-pink-500/10 text-pink-400 p-1 rounded mt-0.5"><i class="fa-solid fa-hand-pinch"></i></div>
+                        <div><strong class="text-white">Cubitan (Pinch):</strong> Berfungsi sebagai klik/tekan atau mulai menggambar.</div>
+                    </li>
+                    <li class="flex items-start gap-2.5">
+                        <div class="bg-emerald-500/10 text-emerald-400 p-1 rounded mt-0.5"><i class="fa-solid fa-hand"></i></div>
+                        <div><strong class="text-white">Telapak Terbuka (Open Palm):</strong> Menyetel ulang atau mereset posisi partikel.</div>
+                    </li>
+                </ul>
+            </div>
+
+        </div>
+
+    </main>
+
+    <script>
+        // Global State Variables
+        let videoElement = document.getElementById('webcam');
+        let canvasElement = document.getElementById('output_canvas');
+        let canvasCtx = canvasElement.getContext('2d');
+        let drawingCanvas = document.getElementById('drawing_canvas');
+        let drawingCtx = drawingCanvas.getContext('2d');
+        
+        let camera = null;
+        let hands = null;
+        let isCameraRunning = false;
+        let currentMode = 'draw'; // 'draw', 'particles', 'stats'
+        
+        // Drawing configurations
+        let currentColor = '#6366f1';
+        let currentBrushSize = 6;
+        let isDrawing = false;
+        let lastX = null;
+        let lastY = null;
+
+        // Particles configurations
+        let particles = [];
+        const numParticles = 60;
+
+        // Performance / FPS
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fps = 0;
+
+        // Initialize particles array
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < numParticles; i++) {
+                particles.push({
+                    x: Math.random() * window.innerWidth,
+                    y: Math.random() * window.innerHeight,
+                    vx: (Math.random() - 0.5) * 2,
+                    vy: (Math.random() - 0.5) * 2,
+                    size: Math.random() * 4 + 2,
+                    color: ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#38bdf8'][Math.floor(Math.random() * 5)]
+                });
+            }
+        }
+        initParticles();
+
+        document.getElementById('toggleCameraBtn').addEventListener('click', toggleCamera);
+        document.getElementById('startPlaceholderBtn').addEventListener('click', toggleCamera);
+
+        const brushSizeRange = document.getElementById('brushSizeRange');
+        const brushSizeVal = document.getElementById('brushSizeVal');
+        brushSizeRange.addEventListener('input', (e) => {
+            currentBrushSize = parseInt(e.target.value);
+            brushSizeVal.textContent = currentBrushSize + 'px';
+        });
+
+        function setDrawColor(color) {
+            currentColor = color;
+            document.querySelectorAll('.color-picker-btn').forEach(btn => {
+                if(btn.getAttribute('data-color') === color) {
+                    btn.classList.add('border-white', 'ring-2', 'ring-indigo-500/50');
+                    btn.classList.remove('border-transparent');
+                } else {
+                    btn.classList.remove('border-white', 'ring-2', 'ring-indigo-500/50');
+                    btn.classList.add('border-transparent');
+                }
+            });
+        }
+
+        function clearCanvas() {
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+        }
+
+        function setInteractionMode(mode) {
+            currentMode = mode;
+            document.getElementById('modeDrawBtn').className = mode === 'draw' ? 'p-3 rounded-xl border border-indigo-500 bg-indigo-500/10 text-indigo-300 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer' : 'p-3 rounded-xl border border-slate-800 bg-cardBg hover:border-slate-700 text-slate-400 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer';
+            document.getElementById('modeParticlesBtn').className = mode === 'particles' ? 'p-3 rounded-xl border border-indigo-500 bg-indigo-500/10 text-indigo-300 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer' : 'p-3 rounded-xl border border-slate-800 bg-cardBg hover:border-slate-700 text-slate-400 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer';
+            document.getElementById('modeStatsBtn').className = mode === 'stats' ? 'p-3 rounded-xl border border-indigo-500 bg-indigo-500/10 text-indigo-300 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer' : 'p-3 rounded-xl border border-slate-800 bg-cardBg hover:border-slate-700 text-slate-400 text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer';
+
+            const drawControls = document.getElementById('drawControlsPanel');
+            if(mode === 'draw') {
+                drawControls.style.display = 'flex';
+                document.getElementById('activeModeBadge').textContent = 'Kanvas Jari';
+            } else if(mode === 'particles') {
+                drawControls.style.display = 'none';
+                document.getElementById('activeModeBadge').textContent = 'Partikel Interaktif';
+            } else {
+                drawControls.style.display = 'none';
+                document.getElementById('activeModeBadge').textContent = 'Analisis Landmark';
+            }
+        }
+
+        function initMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.65,
+                minTrackingConfidence: 0.65
+            });
+
+            hands.onResults(onHandResults);
+        }
+
+        function toggleCamera() {
+            if (!isCameraRunning) {
+                if (!hands) {
+                    initMediaPipe();
+                }
+                
+                camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({ image: videoElement });
+                    },
+                    width: 1280,
+                    height: 720
+                });
+
+                camera.start().then(() => {
+                    isCameraRunning = true;
+                    document.getElementById('cameraBtnText').textContent = 'Matikan Kamera';
+                    document.getElementById('toggleCameraBtn').classList.replace('bg-indigo-600', 'bg-rose-600');
+                    document.getElementById('toggleCameraBtn').classList.replace('hover:bg-indigo-500', 'hover:bg-rose-500');
+                    document.getElementById('cameraPlaceholder').classList.add('opacity-0', 'pointer-events-none');
+                    document.getElementById('statusDot').className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+                    document.getElementById('statusText').textContent = 'Kamera Aktif';
+                }).catch(err => {
+                    console.error("Gagal mengakses kamera:", err);
+                    alert("Gagal mengakses kamera web. Pastikan izin kamera diaktifkan pada browser.");
+                });
+            } else {
+                if (camera) {
+                    camera.stop();
+                }
+                isCameraRunning = false;
+                document.getElementById('cameraBtnText').textContent = 'Mulai Kamera';
+                document.getElementById('toggleCameraBtn').classList.replace('bg-rose-600', 'bg-indigo-600');
+                document.getElementById('toggleCameraBtn').classList.replace('hover:bg-rose-500', 'hover:bg-indigo-500');
+                document.getElementById('cameraPlaceholder').classList.remove('opacity-0', 'pointer-events-none');
+                document.getElementById('statusDot').className = 'w-2.5 h-2.5 rounded-full bg-amber-500';
+                document.getElementById('statusText').textContent = 'Kamera Siap';
+                
+                // Clear output canvas
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                document.getElementById('gestureName').textContent = 'Menunggu Tangan...';
+                document.getElementById('gestureDesc').textContent = 'Arahkan tangan ke depan kamera.';
+            }
+        }
+
+        function onHandResults(results) {
+            // Calculate FPS
+            const now = performance.now();
+            frameCount++;
+            if (now - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = now;
+                document.getElementById('fpsCounter').textContent = fps;
+            }
+
+            // Match canvas dimensions to video feed
+            if (canvasElement.width !== videoElement.videoWidth || canvasElement.height !== videoElement.videoHeight) {
+                canvasElement.width = videoElement.videoWidth || 1280;
+                canvasElement.height = videoElement.videoHeight || 720;
+                drawingCanvas.width = canvasElement.width;
+                drawingCanvas.height = canvasElement.height;
+            }
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // Handle Particles Animation in background
+            if (currentMode === 'particles') {
+                updateAndDrawParticles(results.multiHandLandmarks);
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                let primaryHand = results.multiHandLandmarks[0];
+                
+                // Draw skeleton connections and landmarks
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#6366f1', lineWidth: 4 });
+                    drawLandmarks(canvasCtx, landmarks, { color: '#ec4899', lineWidth: 2, radius: 4 });
+                }
+
+                // Gesture Recognition
+                detectGesture(primaryHand);
+
+                // Mode-specific actions
+                if (currentMode === 'draw') {
+                    handleDrawingMode(primaryHand);
+                }
+            } else {
+                document.getElementById('gestureName').textContent = 'Tidak Ada Tangan';
+                document.getElementById('gestureDesc').textContent = 'Pastikan tangan terlihat di dalam bingkai kamera.';
+                document.getElementById('gestureIcon').innerHTML = '<i class="fa-solid fa-hand"></i>';
+                isDrawing = false;
+                lastX = null;
+                lastY = null;
+            }
+
+            canvasCtx.restore();
+        }
+
+        // Gesture recognition logic based on landmarks math
+        function detectGesture(landmarks) {
+            // Landmark 4: Thumb tip, 8: Index tip, 12: Middle tip, 16: Ring tip, 20: Pinky tip
+            // Landmark 0: Wrist
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+            const wrist = landmarks[0];
+
+            // Distance between thumb tip and index tip (Pinch detection)
+            const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+
+            // Check if fingers are extended (simple distance comparison to wrist)
+            const isIndexExtended = indexTip.y < landmarks[6].y;
+            const isMiddleExtended = middleTip.y < landmarks[10].y;
+            const isRingExtended = ringTip.y < landmarks[14].y;
+            const isPinkyExtended = pinkyTip.y < landmarks[18].y;
+
+            let name = 'Tangan Terdeteksi';
+            let desc = 'Gerakan tangan aktif.';
+            let icon = '<i class="fa-solid fa-hand"></i>';
+
+            if (pinchDistance < 0.05) {
+                name = 'Cubitan (Pinch)';
+                desc = 'Digunakan untuk menggambar atau memilih.';
+                icon = '<i class="fa-solid fa-hand-pinch text-pink-400"></i>';
+            } else if (isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                name = 'Telunjuk (Pointing)';
+                desc = 'Menunjuk ke arah layar / kursor.';
+                icon = '<i class="fa-solid fa-hand-point-up text-indigo-400"></i>';
+            } else if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended) {
+                name = 'Telapak Terbuka';
+                desc = 'Semua jari terbuka lebar.';
+                icon = '<i class="fa-solid fa-hand text-emerald-400"></i>';
+            } else if (!isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                name = 'Kepalan Tangan (Fist)';
+                desc = 'Tangan mengepal.';
+                icon = '<i class="fa-solid fa-hand-fist text-amber-400"></i>';
+            }
+
+            document.getElementById('gestureName').textContent = name;
+            document.getElementById('gestureDesc').textContent = desc;
+            document.getElementById('gestureIcon').innerHTML = icon;
+        }
+
+        // Finger drawing logic
+        function handleDrawingMode(landmarks) {
+            const indexTip = landmarks[8];
+            const thumbTip = landmarks[4];
+            
+            // Convert normalized coordinates to canvas width/height
+            const x = indexTip.x * drawingCanvas.width;
+            const y = indexTip.y * drawingCanvas.height;
+
+            const pinchDistance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+
+            if (pinchDistance < 0.05) {
+                // Pinching: Draw!
+                if (!isDrawing) {
+                    isDrawing = true;
+                    lastX = x;
+                    lastY = y;
+                } else {
+                    drawingCtx.beginPath();
+                    drawingCtx.moveTo(lastX, lastY);
+                    drawingCtx.lineTo(x, y);
+                    drawingCtx.strokeStyle = currentColor;
+                    drawingCtx.lineWidth = currentBrushSize;
+                    drawingCtx.lineCap = 'round';
+                    drawingCtx.lineJoin = 'round';
+                    drawingCtx.stroke();
+                    
+                    lastX = x;
+                    lastY = y;
+                }
+            } else {
+                isDrawing = false;
+                lastX = null;
+                lastY = null;
+            }
+        }
+
+        // Particle interactive simulation
+        function updateAndDrawParticles(handLandmarksList) {
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            
+            let handPos = null;
+            if (handLandmarksList && handLandmarksList.length > 0) {
+                const indexTip = handLandmarksList[0][8];
+                handPos = {
+                    x: indexTip.x * drawingCanvas.width,
+                    y: indexTip.y * drawingCanvas.height
+                };
+            }
+
+            particles.forEach(p => {
+                // Move particles
+                p.x += p.vx;
+                p.y += p.vy;
+
+                // Bounce off walls
+                if (p.x < 0 || p.x > drawingCanvas.width) p.vx *= -1;
+                if (p.y < 0 || p.y > drawingCanvas.height) p.vy *= -1;
+
+                // Interact with hand position if available
+                if (handPos) {
+                    const dist = Math.hypot(p.x - handPos.x, p.y - handPos.y);
+                    if (dist < 120) {
+                        // Pull towards finger or push away
+                        const angle = Math.atan2(p.y - handPos.y, p.x - handPos.x);
+                        p.x += Math.cos(angle) * 3;
+                        p.y += Math.sin(angle) * 3;
+                    }
+                }
+
+                // Draw particle
+                drawingCtx.beginPath();
+                drawingCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                drawingCtx.fillStyle = p.color;
+                drawingCtx.fill();
+            });
+        }
+    </script>
+</body>
+</html>
